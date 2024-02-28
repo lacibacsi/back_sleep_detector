@@ -1,0 +1,9 @@
+dataset information
+
+images taken from: http://crowley-coutaz.fr/Head%20Pose%20Image%20Database.html
+
+notes on classification for back sleep (true = back):
+
+front orientation is always considered laying on back
+pan orientation up to and including +/- 60 degrees is considered on back
+tilt orientation is ignored 
