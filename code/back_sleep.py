@@ -1,4 +1,5 @@
 import os
+import pickle
 from datetime import datetime
 
 import PIL
@@ -47,8 +48,9 @@ class BackSleepDetector:
     def __init__(self):
         # default model path
         self._model_path = '../models'
-        self._regression_model = self._model_path + "/back_detector.pkl"
+        self._classifier_model = self._model_path + "/back_detector.pkl"
         self._parsed_training_data = self._model_path + "/training_data.pkl"
+        self._default_image_training_path = "../dataset/headpose"
         self._snapshot_path = "../models/hopenet_robust_alpha1.pkl"
         self._eval_path = "/Users/laszlokovari/Documents/Prog/posture/"
 
@@ -65,6 +67,8 @@ class BackSleepDetector:
 
         self._setup_hopenet_model()
 
+        # classifier model, will be created as part of the training or loaded as part of the predict method
+        self._knn_classifier = None
     def _setup_hopenet_model(self):
         """
         Sets up the hopenet model and loads the saves snapshot (pretrained) in it
@@ -142,7 +146,6 @@ class BackSleepDetector:
 
         # testing on M1 mac
 
-
     def hopenet_predict(self, face_image, save_axis=False):
         '''
         Takes an input image with loaded model, resizes the image and gets the 3 Euler angles for the input face
@@ -187,7 +190,7 @@ class BackSleepDetector:
 
         return yaw, pitch, roll
 
-    def train(self, training_data_path, save_model=True, use_saved_data =True, camera_angle_correction=(0.0, 0.0, 0.0)):
+    def train(self, training_data_path=None, save_model=True, use_saved_data =True, camera_angle_correction=(0.0, 0.0, 0.0)):
         """
         Trains a simple nearest neighbor model based on a pretrained hopenet model and the input images
         The input parameters to the model are the yaw, pitch, roll values from hopenet and the dependent variable
@@ -198,6 +201,8 @@ class BackSleepDetector:
         :param camera_angle_correction: if the images taken were taken by a camera whose angle needs to be offset
         :return: None
         """
+        if training_data_path is None:
+            training_data_path = self._default_image_training_path
 
         df_alldata = None
         data_size = None
@@ -249,15 +254,15 @@ class BackSleepDetector:
         # using 0.3 for testing and shuffle true randomize
         x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.3, shuffle=True)
 
-        clf = neighbors.KNeighborsClassifier()
-        clf.fit(x_train, y_train)
+        self._knn_classifier = neighbors.KNeighborsClassifier()
+        self._knn_classifier.fit(x_train.values, y_train)
 
         # evaluate performance
-        score = clf.score(x_test, y_test)
+        score = self._knn_classifier.score(x_test, y_test)
         print(f'k nearest neighbor model trained on {len(y_train)} images, resulting score on {len(y_test)} is {score} ')
 
         # further metrics
-        y_pred = pd.Series(clf.predict(x_test))
+        y_pred = pd.Series(self._knn_classifier.predict(x_test))
         print("Accuracy:", metrics.accuracy_score(y_test, y_pred))
         print("Precision:", metrics.precision_score(y_test, y_pred))
         print("Recall:", metrics.recall_score(y_test, y_pred))
@@ -265,9 +270,43 @@ class BackSleepDetector:
         cnf_matrix = metrics.confusion_matrix(y_test, y_pred)
         print(cnf_matrix)
 
+        if save_model:
+            with open(self._classifier_model, 'wb') as knnPickle:
+                pickle.dump(self._knn_classifier, knnPickle)
+            print('classifier saved')
+
+    def predict(self, image_path, camera_angle_correction=(0.0, 0.0, 0.0)):
+        """
+        Takes a single image, runs a face recognition on it, predicts yaw, pitch, roll through hopenet
+        and classified as either laying on back or not
+        assumption is that the photo is taken from the front (no camera angle correction yet)
+        :param image_path: full path for the image to be predicted
+        :param camera_angle_correction: tbd
+        :return: True is the person is laying on their back, False otherwise
+        """
+        if self._knn_classifier is None:
+            with open(self._classifier_model, 'rb') as knnpickle:
+                self._knn_classifier = pickle.load(knnpickle)
+
+        # running face detection
+        face_detected = self.load_face(image_path)
+
+        if face_detected is not None:
+            yaw, pitch, roll = self.hopenet_predict(face_detected, False)
+            #print(f'yaw:{yaw}, pitch: {pitch}, roll: {roll}')
+
+            result = self._knn_classifier.predict([[yaw, pitch, roll]])
+            return (bool)(result[0])
+
+        return False
+
 
 if __name__ == '__main__':
     detector = BackSleepDetector()
-    detector.train("../dataset/headpose")
+    #detector.train("../dataset/headpose")
+    print(detector.predict("../dataset/predict/snapshot-00004.jpg"))
+    print(detector.predict("../dataset/predict/snapshot-00007.jpg"))
+    print(detector.predict("../dataset/predict/90degrees.jpg"))
+
 
 
